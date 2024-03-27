@@ -1,17 +1,12 @@
 import { MyScene } from "./scene.js";
-
 // socket.io
 let mySocket;
-
 // array of connected peers
 let peers = {};
-
 // Variable to store our three.js scene:
 let myScene;
-
 // Our local media stream (i.e. webcam and microphone stream)
 let localMediaStream = null;
-
 ////////////////////////////////////////////////////////////////////////////////
 // Start-Up Sequence:
 ////////////////////////////////////////////////////////////////////////////////
@@ -53,19 +48,18 @@ window.onload = async () => {
   }
 
   createLocalVideoElement();
-
   //  create the threejs scene
   console.log("Creating three.js scene...");
-  myScene = new MyScene();
+  myScene = new MyScene(mySocket);
 
   // finally create the websocket connection
   establishWebsocketConnection();
-
-  // start sending position data to the server
-  setInterval(() => {
-    mySocket.emit("move", myScene.getPlayerPosition());
-  }, 200);
   setupSpeechRecognition();
+  // 每隔10秒发送一次'adjustFrameSize'事件
+  setInterval(() => {
+    mySocket.emit('adjustFrameSize', userSpeakCounts);
+    userSpeakCounts = {}; // 重置发言次数
+  }, 10 * 1000);
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -92,12 +86,7 @@ function establishWebsocketConnection() {
       myScene.addPeerAvatar(theirId);
     }
   });
-  // 新增:接收已有的语音识别结果
-  mySocket.on('existingTranscripts', (existingTranscripts) => {
-    for (let socketId in existingTranscripts) {
-      displayTranscript(socketId, existingTranscripts[socketId]);
-    }
-  });
+
   // when a new user has entered the server
   mySocket.on("newPeerConnected", (theirId) => {
     if (theirId != mySocket.id && !(theirId in peers)) {
@@ -109,16 +98,6 @@ function establishWebsocketConnection() {
       myScene.addPeerAvatar(theirId);
     }
   });
-    // 新增: 处理初始 STT.txt 文件内容
-    mySocket.on('initSttFile', (sttFileContent) => {
-      displaySttFileContent(sttFileContent);
-    });
-  
-    // 新增: 处理更新后的 STT.txt 文件内容
-    mySocket.on('updateSttFile', (sttFileContent) => {
-      displaySttFileContent(sttFileContent);
-      displayTranscript1(socketId, existingTranscripts[socketId]);
-    });
 
   mySocket.on("peerDisconnected", (_id) => {
     // Update the data from the server
@@ -158,20 +137,26 @@ function establishWebsocketConnection() {
     delete peerInfoFromServer[mySocket.id];
     myScene.updatePeerAvatars(peerInfoFromServer);
   });
-    // 监听位置更新事件
-    mySocket.on('peerPositionUpdated', (id, position) => {
-      myScene.updatePeerPosition(id, position);
-    });
+  // 监听位置更新事件
+  mySocket.on('peerPositionUpdated', (id, position) => {
+    myScene.updatePeerPosition(id, position);
+  });
 
-    mySocket.on('peerTranscript', (socketId, transcript) => {
-      /*displayTranscript(socketId, transcript);*/
-      displayTranscript1(socketId, transcript);
-    });
+  mySocket.on('peerTranscript', (socketId, transcript) => {
+    displayTranscript1(socketId, transcript);
+  });
+
+  // 新增: 处理初始 STT.txt 文件内容
+  mySocket.on('initSttFile', (sttFileContent) => {
+    displaySttFileContent(sttFileContent);
+  });
+
+  // 新增: 处理更新后的 STT.txt 文件内容
+  mySocket.on('updateSttFile', (sttFileContent) => {
+    displaySttFileContent(sttFileContent);
+    displayTranscript1(socketId, existingTranscripts[socketId]);
+  });
 }
-
-/*function displayTranscript(socketId, transcript) {
-  myScene.updateTranscript(socketId, transcript); // 修改:将更新transcript的任务交给MyScene类
-}*/
 
 // 新增: 显示 STT.txt 文件内容
 function displaySttFileContent(sttFileContent) {
@@ -195,8 +180,9 @@ function displayTranscript1(socketId, transcript) {
     bubbleElement.classList.add('bubble');
     document.getElementById('transcript-container').appendChild(bubbleElement);
   }
-
-  bubbleElement.innerHTML = `<p>${transcript}</p>`;
+  // 随机生成字体大小(60px到300px之间)nio
+  const fontSize = Math.floor(Math.random() * 40) + 60;
+  bubbleElement.innerHTML = `<p style="font-size: ${fontSize}px">${transcript}</p>`;
   bubbleElement.classList.toggle('active', transcript !== '');
 
   // 将 bubble 元素置于相应的 avatar 上方
@@ -212,7 +198,6 @@ function displayTranscript1(socketId, transcript) {
     bubbleElement.style.zIndex = '1000';
   }
 }
-
 
 ////////////////////////////////////////////////////////////////////////////////
 // SimplePeer WebRTC Connections
@@ -262,8 +247,14 @@ function createLocalVideoElement() {
 
   if (localMediaStream) {
     let videoStream = new MediaStream([localMediaStream.getVideoTracks()[0]]);
+    localMediaStream.getAudioTracks()[0].enabled = false;
 
     videoElement.srcObject = videoStream;
+    videoElement.muted = true;
+    videoElement.setAttribute('playsinline', '');
+    videoElement.play().catch((error) => {
+      console.log('Error autoplay video:', error);
+    });
   }
   document.body.appendChild(videoElement);
 }
@@ -301,6 +292,7 @@ function updatePeerMediaElements(_id, stream) {
 
   let audioEl = document.getElementById(_id + "_audio");
   audioEl.srcObject = audioStream;
+
 }
 
 function removePeerMediaElements(_id) {

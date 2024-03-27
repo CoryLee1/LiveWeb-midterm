@@ -1,19 +1,18 @@
 import * as THREE from "three";
-import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 import { FontLoader } from 'three/addons/loaders/FontLoader.js';
 import { TextGeometry } from 'three/addons/geometries/TextGeometry.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader';
 
 export class MyScene {
   constructor(socket) {
-    this.avatars = {};
-    this.socket = socket;
-    this.isDragging = false;
-    this.selectedObject = null;
-
     // create a scene in which all other objects will exist
     this.scene = new THREE.Scene();
-
+    this.socket = socket;
+    this.moveVector = new THREE.Vector3(0, 0, 0);
+    this.avatars = {};
+    
+    this.isDragging = false;
+    this.selectedObject = null;
     // create a camera and position it in space
     let aspect = window.innerWidth / window.innerHeight;
     this.camera = new THREE.PerspectiveCamera(75, aspect, 0.1, 1000);
@@ -29,13 +28,18 @@ export class MyScene {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap; // default THREE.PCFShadowMap
 
-    // add pointer lock controls
-    this.controls = new PointerLockControls(this.camera, this.renderer.domElement);
-    this.scene.add(this.controls.getObject());
-
     this.setupEnvironment();
 
     this.frameCount = 0;
+
+
+    this.loop();
+    this.fontLoader = new FontLoader(); // 新增:创建FontLoader
+    this.fontLoader.load('Expose-Regular.json', (font) => {
+      this.font = font; // 新增:加载字体
+    });
+    this.fbxModels = [];
+    this.loadFBXModels();
 
     // 添加键盘事件监听
     document.addEventListener('keydown', this.onDocumentKeyDown.bind(this), false);
@@ -52,18 +56,49 @@ export class MyScene {
     this.dragOffset = new THREE.Vector3();
     this.targetPosition = new THREE.Vector3();
 
-    // lock pointer lock controls
-    this.controls.lock();
 
-    this.loop();
-    this.fontLoader = new FontLoader(); // 新增:创建FontLoader
-    this.fontLoader.load('Expose-Regular.json', (font) => {
-      this.font = font; // 新增:加载字体
+  }
+  if (socket) {
+    this.socket = socket;
+    this.socket.on('adjustFrameSize', (userSpeakCounts) => {
+      console.log('Received userSpeakCounts:', userSpeakCounts);
+      console.log('Current avatars:', this.avatars);
+    
+      const totalSpeakCount = Object.values(userSpeakCounts).reduce((sum, count) => sum + count, 0);
+    
+      for (let id in this.avatars) {
+        const speakCount = userSpeakCounts[id] || 0;
+        const scale = 1 + speakCount / totalSpeakCount * 0.5;
+        console.log(`Updating scale for user ${id}: ${scale}`);
+        
+        if (this.avatars[id].model) {
+          this.avatars[id].model.scale.set(scale, scale, scale);
+        }
+    
+        if (scale > 1) {
+          this.logMessage(`User ${id}'s FBX model has been enlarged.`);
+        }
+      }
     });
-    this.fbxModels = [];
-    this.loadFBXModels();
+    
+
+    this.socket.on('showWinner', (winnerId) => {
+      // 显示 "xxx主导了话语权" 的弹窗
+      alert(`${winnerId} 主导了话语权`);
+    });
   }
 
+  logMessage(message) {
+    const logContainer = document.getElementById('log-container');
+    const logElement = document.createElement('p');
+    logElement.textContent = message;
+    logContainer.appendChild(logElement);
+  
+    // 如果日志数量超过10条,则删除最早的日志
+    if (logContainer.childElementCount > 10) {
+      logContainer.removeChild(logContainer.firstChild);
+    }
+  }
   loadFBXModels() {
     const fbxLoader = new FBXLoader();
     const modelNames = [
@@ -86,13 +121,11 @@ export class MyScene {
     modelNames.forEach((name, index) => {
       fbxLoader.load(`${name}.fbx`, (fbxModel) => {
         fbxModel.scale.set(0.05, 0.05, 0.05); // 根据需要调整模型的缩放
-
         this.fbxModels.push(fbxModel);
         this.scene.add(fbxModel);
       });
     });
   }
-
   //////////////////////////////////////////////////////////////////////
   //////////////////////////////////////////////////////////////////////
   // Lighting 💡
@@ -114,30 +147,23 @@ export class MyScene {
     myDirectionalLight.castShadow = true;
     this.scene.add(myDirectionalLight);
 
-    // add a ground
-    let groundGeo = new THREE.BoxGeometry(300, 0.1, 300);
-    let groundMat = new THREE.MeshPhongMaterial({ color: "red" });
-    let ground = new THREE.Mesh(groundGeo, groundMat);
-    ground.receiveShadow = true;
-    this.scene.add(ground);
   }
   //////////////////////////////////////////////////////////////////////
   //////////////////////////////////////////////////////////////////////
   // Keyboard Controls 🎹
-
   onDocumentKeyDown(event) {
     switch (event.keyCode) {
       case 87: // W
-        this.moveVector.z = -this.moveSpeed;
+        if (this.moveVector) this.moveVector.z = -this.moveSpeed;
         break;
       case 83: // S
-        this.moveVector.z = this.moveSpeed;
+        if (this.moveVector) this.moveVector.z = this.moveSpeed;
         break;
       case 65: // A
-        this.moveVector.x = -this.moveSpeed;
+        if (this.moveVector) this.moveVector.x = -this.moveSpeed;
         break;
       case 68: // D
-        this.moveVector.x = this.moveSpeed;
+        if (this.moveVector) this.moveVector.x = this.moveSpeed;
         break;
     }
   }
@@ -146,11 +172,11 @@ export class MyScene {
     switch (event.keyCode) {
       case 87: // W
       case 83: // S
-        this.moveVector.z = 0;
+        if (this.moveVector) this.moveVector.z = 0;
         break;
       case 65: // A
       case 68: // D
-        this.moveVector.x = 0;
+        if (this.moveVector) this.moveVector.x = 0;
         break;
     }
   }
@@ -160,7 +186,6 @@ export class MyScene {
   addPeerAvatar(id) {
     console.log("Adding peer avatar to 3D scene.");
     this.avatars[id] = {};
-  
     let videoElement = document.getElementById(id + "_video");
     if (!videoElement) {
       console.warn("Video element not found for peer with id:", id);
@@ -177,17 +202,14 @@ export class MyScene {
   
     let avatarIndex = Object.keys(this.avatars).length - 1;
     if (avatarIndex < this.fbxModels.length) {
-      let fbxModel = this.fbxModels[avatarIndex].clone();
+      let fbxModel = this.fbxModels[avatarIndex];
       fbxModel.traverse((child) => {
         if (child.isMesh) {
           child.material = videoMaterial;
         }
       });
   
-      this.scene.add(fbxModel);
       this.avatars[id].model = fbxModel;
-      
-      // 创建一个组来包含模型和文本
       this.avatars[id].group = new THREE.Group();
       this.avatars[id].group.add(fbxModel);
       this.scene.add(this.avatars[id].group);
@@ -254,26 +276,6 @@ export class MyScene {
     this.selectedObject = null;
   }
 
-  updateTranscript(socketId, transcript) {
-    if (!this.avatars[socketId]) return;
-
-    // 移除旧的transcript
-    if (this.avatars[socketId].transcript) {
-      this.scene.remove(this.avatars[socketId].transcript);
-    }
-
-    // 创建新的transcript
-    const textGeometry = new TextGeometry(transcript, {
-      font: this.font,
-      size: 0.1,
-      height: 0.01,
-    });
-    const textMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
-    const textMesh = new THREE.Mesh(textGeometry, textMaterial);
-    textMesh.position.set(0, 1.7, 0); // 调整文本位置
-    this.avatars[socketId].group.add(textMesh);
-    this.avatars[socketId].transcript = textMesh;
-  }
   updatePeerPosition(id, position) {
     if (this.avatars[id]) {
       this.avatars[id].group.position.set(position[0], position[1], position[2]);
@@ -349,10 +351,15 @@ export class MyScene {
       this.updateClientVolumes();
     }
     // 更新相机位置
-    this.camera.position.add(this.moveVector);
+    if (this.camera && this.camera.position) {
+      this.camera.position.add(this.moveVector);
+    }
 
     this.renderer.render(this.scene, this.camera);
 
     requestAnimationFrame(() => this.loop());
+
+    //Avatars
+    //console.log(JSON.stringify(this.avatars) +"Avatars:!!!!!!");
   }
 }

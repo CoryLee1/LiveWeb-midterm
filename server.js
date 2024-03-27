@@ -17,6 +17,7 @@ const sttFilePath = path.join(__dirname, 'STT.txt');
 const io = require("socket.io")().listen(server);
 const peers = {};
 const transcripts = {}; // 新增:存储用户的语音识别结果
+const userSpeakCounts = {};
 // 监视 STT.txt 文件的变化
 fs.watch(sttFilePath, (eventType, filename) => {
   if (filename && eventType === 'change') {
@@ -48,6 +49,7 @@ io.on("connection", (socket) => {
   };
   const currentCapacity = Object.keys(peers).length;
   const maxCapacity = 14;
+  userSpeakCounts[socket.id] = 0;
   io.emit('updateCapacity', currentCapacity, maxCapacity);
     // 新增: 发送初始 STT.txt 文件内容给新用户
     fs.readFile(sttFilePath, 'utf8', (err, data) => {
@@ -72,7 +74,7 @@ io.on("connection", (socket) => {
   socket.on('transcript', (transcript) => {
     transcripts[socket.id] = transcript;
     socket.broadcast.emit('peerTranscript', socket.id, transcript);
-
+  
     // 将语音识别内容写入文件
     fs.appendFile(sttFilePath, `[${socket.id}]: ${transcript}\n`, (err) => {
       if (err) {
@@ -81,7 +83,28 @@ io.on("connection", (socket) => {
         console.log(`Transcript saved for ${socket.id}: ${transcript}`);
       }
     });
+  
+    if (!userSpeakCounts[socket.id]) {
+      userSpeakCounts[socket.id] = 0;
+    }
+    userSpeakCounts[socket.id]++;
+    io.sockets.emit('adjustFrameSize', userSpeakCounts);
   });
+
+// 每隔 100 毫秒清理并发送 peers 对象
+setInterval(() => {
+  // 清理 peers 对象,删除任何不完整的对象
+  const cleanedPeers = {};
+  Object.keys(peers).forEach(id => {
+    const peer = peers[id];
+    if (peer && peer.position && peer.rotation) {
+      cleanedPeers[id] = peer;
+    }
+  });
+
+  // 发送清理后的对象
+  io.sockets.emit('peers', cleanedPeers);
+}, 100);
 
   socket.on("msg", (data) => {
     console.log("Got message from client with id ", socket.id, ":", data);
